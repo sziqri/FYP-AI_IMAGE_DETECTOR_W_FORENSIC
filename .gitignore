@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+data/
+weights/*.pth
+outputs/checkpoints/
+outputs/
+*.yaml
+!configs/default.yaml
+**/*.pth
+GUI_MODEL/
+*.pth
+**/*.pth
+weights/
