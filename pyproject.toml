@@ -1,0 +1,13 @@
+[project]
+name = "efficientnet-b4-project"
+version = "0.1.0"
+description = "EfficientNet-B4 image classification with PyTorch + timm"
+authors = [{name="Your Name"}]
+requires-python = ">=3.9"
+readme = "README.md"
+
+[tool.isort]
+profile = "black"
+
+[tool.black]
+line-length = 100
