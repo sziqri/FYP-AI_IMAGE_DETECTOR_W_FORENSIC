@@ -21,71 +21,37 @@ class RandomJPEGCompression:
             return Image.open(buffer)
         return img
 
-def build_transforms(img_size: int, train: bool = True,
-                     rand_augment: bool = True, color_jitter: float = 0.0,
-                     hflip_prob: float = 0.5):
-    
-    # --- THESIS EXPERIMENT: Resolution Equalizer (UPDATED) ---
-    # OLD STRATEGY: Resize((128, 128)) -> Destroyed noise/details (Bad for forensics)
-    # NEW STRATEGY: RandomCrop(128) -> Keeps noise/details (Fair fight)
-    
-    equalize_resolution = [
-        # 1. Cut a 128x128 piece from the HD Real Image (preserves quality)
-        #    If image is already 128 (BigGAN), this effectively does nothing harmful.
-        transforms.RandomCrop(128, pad_if_needed=True, padding_mode='reflect'),
-        
-        # 2. Scale up to model size (e.g., 320 or 384)
-        transforms.Resize((img_size, img_size), interpolation=transforms.InterpolationMode.BICUBIC),
-        transforms.RandomErasing(p=0.2)
-    ]
-    # -----------------------------------------------
-
+def build_transforms(img_size: int, train: bool = True, **kwargs):
+    """
+    1-to-1 Replication of Paper 4 Augmentations for Baseline.
+    Applies Rotation, Shear, Zoom, Flip, and Brightness adjustments.
+    """
     if train:
-        aug = list(equalize_resolution) # Resolves 128x128 vs High-Res
-        
-        aug.extend([
-            # 1. Spatial/Geometry Augmentation
-            transforms.RandomHorizontalFlip(p=hflip_prob),
-            transforms.RandomCrop(img_size, padding=4),
-
-            # 2. Forensic Attack 1: Smoothing (Gaussian Blur)
-            # Use standard transforms.GaussianBlur for compatibility
-            transforms.RandomApply([
-                transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0))
-            ], p=0.3),
+        return transforms.Compose([
+            transforms.Resize((img_size, img_size)),
             
-            # 3. Forensic Attack 2: Quantization (JPEG)
-            # Always put JPEG near the end to simulate the saving process
-            RandomJPEGCompression(quality_range=(60, 100), p=0.5),
+            # 1. Rotation, Shift, Zoom, and Shear [Paper 4 specific]
+            transforms.RandomAffine(
+                degrees=15,             # Image rotation (typically 15-20 degrees)
+                translate=(0.1, 0.1),   # Horizontal & Vertical shifts
+                scale=(0.8, 1.2),       # Zooming in (1.2) and out (0.8)
+                shear=10                # Shear transformation
+            ),
             
-            # 4. Color Jitter (Optional, after forensic attacks)
-            transforms.ColorJitter(0.2, 0.2, 0.2, 0.1) if color_jitter > 0 else transforms.Lambda(lambda x: x)
-        ])
-
-        # Color Jitter
-        if color_jitter > 0:
-            aug.append(transforms.ColorJitter(color_jitter, color_jitter, color_jitter, 0.1))
-        
-        # RandAugment
-        if rand_augment:
-            try:
-                from torchvision.transforms import RandAugment
-                aug.append(RandAugment())
-            except ImportError:
-                print("RandAugment not found. Skipping.")
-        
-        # Finalize
-        train_tfms = transforms.Compose(aug + [
+            # 2. Horizontal flipping
+            transforms.RandomHorizontalFlip(p=0.5),
+            
+            # 3. Brightness adjustment exactly within a range of 0.8 to 1.2
+            transforms.ColorJitter(brightness=(0.8, 1.2)),
+            
+            # Finalize
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
-        return train_tfms
-
     else:
-        # Validation Transforms
-        # MUST also use Equalizer to make the test fair!
+        # Validation/Testing data MUST NOT be augmented, only resized and normalized.
         return transforms.Compose([
-            *equalize_resolution, 
+            transforms.Resize((img_size, img_size)),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])

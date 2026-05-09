@@ -1,48 +1,51 @@
 import torch
 import torch.nn as nn
-from torchvision.models import efficientnet_v2_m, EfficientNet_V2_M_Weights
+from torchvision.models import resnet50, ResNet50_Weights
 
-class EfficientNetV2MWithExtras(nn.Module):
+class ResNet50WithExtras(nn.Module):
     def __init__(self, num_classes=2, in_chans=3, pretrained=True):
         super().__init__()
         self.in_chans = in_chans
         
-        # Load pretrained EfficientNetV2-M
+        # Load pretrained ResNet50
         if pretrained:
-            weights = EfficientNet_V2_M_Weights.IMAGENET1K_V1
-            self.backbone = efficientnet_v2_m(weights=weights)
+            weights = ResNet50_Weights.IMAGENET1K_V1
+            self.backbone = resnet50(weights=weights)
         else:
-            self.backbone = efficientnet_v2_m(weights=None)
+            self.backbone = resnet50(weights=None)
         
         # Handle extra input channels
         if in_chans != 3:
             self._modify_first_conv(in_chans)
         
-        # Modify classifier
-        in_features = self.backbone.classifier[1].in_features
-        self.backbone.classifier = nn.Sequential(
+        # Modify classifier (fc in ResNet)
+        in_features = self.backbone.fc.in_features
+        self.backbone.fc = nn.Sequential(
             nn.Dropout(p=0.3, inplace=True),
             nn.Linear(in_features, num_classes)
         )
     
     def load_pretrained_weights(self, state_dict):
-        """Load pretrained weights handling channel mismatch."""
+        """Load pretrained weights handling channel mismatch safely."""
         # Handle first conv layer for different input channels
         if self.in_chans != 3:
-            first_conv_weight = state_dict['features.0.0.weight']
-            new_first_conv = torch.randn_like(first_conv_weight)
-            new_first_conv[:, :3] = first_conv_weight  # Copy RGB weights
-            # Initialize extra channels
-            for i in range(3, self.in_chans):
-                new_first_conv[:, i] = first_conv_weight.mean(dim=1)
-            state_dict['features.0.0.weight'] = new_first_conv
+            # ResNet's first conv layer is 'conv1.weight'
+            if 'conv1.weight' in state_dict:
+                first_conv_weight = state_dict['conv1.weight']
+                new_first_conv = torch.randn_like(first_conv_weight)
+                new_first_conv[:, :3] = first_conv_weight  # Copy RGB weights
+                
+                # Initialize extra channels
+                for i in range(3, self.in_chans):
+                    new_first_conv[:, i] = first_conv_weight.mean(dim=1)
+                state_dict['conv1.weight'] = new_first_conv
         
-        # Load with strict=False to ignore extra channel mismatches
+        # Load with strict=False to ignore any deep architectural mismatches safely
         self.load_state_dict(state_dict, strict=False)
 
     def _modify_first_conv(self, in_chans):
         """Modify first conv layer to handle extra channels."""
-        original_conv = self.backbone.features[0][0]
+        original_conv = self.backbone.conv1
         
         # Create new conv layer with correct input channels
         new_conv = nn.Conv2d(
@@ -65,24 +68,24 @@ class EfficientNetV2MWithExtras(nn.Module):
                 # If fewer than 3 channels, take first channels
                 new_conv.weight = original_conv.weight[:, :in_chans]
         
-        self.backbone.features[0][0] = new_conv
+        self.backbone.conv1 = new_conv
     
     def forward(self, x):
         return self.backbone(x)
 
-class EfficientNetV2MStandard(nn.Module):
+class ResNet50Standard(nn.Module):
     def __init__(self, num_classes=2, pretrained=True):
         super().__init__()
         
         if pretrained:
-            weights = EfficientNet_V2_M_Weights.IMAGENET1K_V1
-            self.model = efficientnet_v2_m(weights=weights)
+            weights = ResNet50_Weights.IMAGENET1K_V1
+            self.model = resnet50(weights=weights)
         else:
-            self.model = efficientnet_v2_m(weights=None)
+            self.model = resnet50(weights=None)
         
         # Modify classifier
-        in_features = self.model.classifier[1].in_features
-        self.model.classifier = nn.Sequential(
+        in_features = self.model.fc.in_features
+        self.model.fc = nn.Sequential(
             nn.Dropout(p=0.3, inplace=True),
             nn.Linear(in_features, num_classes)
         )

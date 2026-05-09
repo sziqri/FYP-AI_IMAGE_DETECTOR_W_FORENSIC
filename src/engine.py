@@ -17,6 +17,7 @@ class TrainState:
     epoch: int = 0
     best_val_acc: float = 0.0
     best_f1: float = 0.0
+    best_val_loss: float = float('inf') # Add this line
 
 class ForensicMetrics:
     def __init__(self, num_classes, device):
@@ -54,88 +55,56 @@ class ForensicMetrics:
     
     def _compute_far_frr(self, confusion_matrix):
         if self.num_classes == 2:
-            tn = confusion_matrix[0, 0]
-            fp = confusion_matrix[0, 1]
-            fn = confusion_matrix[1, 0]
-            tp = confusion_matrix[1, 1]
+            # Standard: 0 = Real (Negative), 1 = Fake (Positive)
+            tn = confusion_matrix[0, 0].item() # Real correctly identified
+            fp = confusion_matrix[0, 1].item() # Real mistaken for Fake (False Alarm)
+            fn = confusion_matrix[1, 0].item() # Fake mistaken for Real (Missed Detection)
+            tp = confusion_matrix[1, 1].item() # Fake correctly identified
             
+            # FAR: Probability that a FAKE image is missed (Forensic definition)
             far = fn / (fn + tp) if (fn + tp) > 0 else 0.0
+            # FRR: Probability that a REAL image is wrongly accused
             frr = fp / (fp + tn) if (fp + tn) > 0 else 0.0
-        else:
-            far, frr = 0.0, 0.0
-        return far.item(), frr.item()
-    
-    def reset(self):
-        self.accuracy.reset()
-        self.f1.reset()
-        self.precision.reset()
-        self.recall.reset()
-        self.confusion_matrix.reset()
+            return float(far), float(frr)
 
 # FIXED FUNCTION BELOW
 def train_one_epoch(model, loader, optimizer, scaler, device, num_classes, accumulation_steps=1):
     model.train()
     metrics = ForensicMetrics(num_classes, device)
     total_loss = 0.0
-
     optimizer.zero_grad(set_to_none=True)
 
-    for i, (x, y) in enumerate(loader):
+    for i, (x, y, sources) in enumerate(loader): # Unpack 3 values
         x, y = x.to(device), y.to(device)
-
-        with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=scaler is not None):
+        with torch.autocast(device_type=device.type, enabled=scaler is not None):
             logits = model(x)
-            loss = F.cross_entropy(logits, y)
-            
-            # Normalize loss for accumulation
-            loss = loss / accumulation_steps
-
-        if scaler:
-            scaler.scale(loss).backward()
-        else:
-            loss.backward()
+            loss = F.cross_entropy(logits, y) / accumulation_steps
+        if scaler: scaler.scale(loss).backward()
+        else: loss.backward()
         
-        # Step optimizer only after accumulation_steps
         if (i + 1) % accumulation_steps == 0:
-            if scaler:
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                optimizer.step()
+            if scaler: scaler.step(optimizer); scaler.update()
+            else: optimizer.step()
             optimizer.zero_grad(set_to_none=True)
-
-        # Scale loss back up for logging
         total_loss += loss.item() * accumulation_steps
         metrics.update(logits, y)
-
-    # Handle remaining gradients if total batches is not divisible by accumulation_steps
-    if (i + 1) % accumulation_steps != 0:
-        if scaler:
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            optimizer.step()
-        optimizer.zero_grad(set_to_none=True)
-
-    avg_loss = total_loss / max(1, len(loader))
-    computed_metrics = metrics.compute()
-    
-    return avg_loss, computed_metrics
+    return total_loss / len(loader), metrics.compute()
 
 def validate(model, loader, device, num_classes):
     model.eval()
     metrics = ForensicMetrics(num_classes, device)
-    total_loss = 0.0
-
+    total_loss, source_stats = 0.0, {}
     with torch.no_grad():
-        for x, y in loader:
+        for x, y, sources in loader:
             x, y = x.to(device), y.to(device)
             logits = model(x)
-            loss = F.cross_entropy(logits, y)
-            total_loss += loss.item()
+            total_loss += F.cross_entropy(logits, y).item()
             metrics.update(logits, y)
-
-    val_loss = total_loss / len(loader)
-    computed_metrics = metrics.compute()
-    
-    return val_loss, computed_metrics
+            preds = torch.argmax(logits, dim=1)
+            for p, t, s in zip(preds, y, sources):
+                if s not in source_stats: source_stats[s] = {"correct": 0, "total": 0}
+                if p == t: source_stats[s]["correct"] += 1
+                source_stats[s]["total"] += 1
+    val_metrics = metrics.compute()
+    val_metrics['loss'] = total_loss / len(loader)
+    return val_metrics, source_stats

@@ -19,7 +19,7 @@ def extract_ela_feature(image: Image):
         jpeg_image = Image.open(buffer)
         ela_image = ImageChops.difference(image, jpeg_image)
         
-        # 4. Enhance Brightness (Otherwise it's too dark)
+        # 4. Enhance Brightness (Otherwise it's too dark for the CNN to easily learn)
         extrema = ela_image.getextrema()
         max_diff = max([ex[1] for ex in extrema])
         if max_diff == 0:
@@ -28,6 +28,7 @@ def extract_ela_feature(image: Image):
         ela_image = ImageEnhance.Brightness(ela_image).enhance(scale)
         
         # 5. Convert to Array and Normalize
+        # Output shape: (H, W)
         ela_array = np.array(ela_image.convert('L')).astype(np.float32) / 255.0
         
         return ela_array
@@ -38,20 +39,21 @@ def extract_ela_feature(image: Image):
 def extract_fft_feature(image: Image):
     """Extract FFT (Fast Fourier Transform) feature from an image."""
     try:
-        img_array = np.asarray(image)
-        
-        # Ensure 2D output (H, W)
-        if len(img_array.shape) == 3:
-            img_array = img_array.mean(axis=2)  # Convert to grayscale
+        # Better luminance conversion than simple mean(axis=2)
+        gray_image = image.convert('L')
+        img_array = np.asarray(gray_image).astype(np.float32)
         
         # Compute FFT and get magnitude
-        fft = np.fft.fft2(img_array.astype(np.float32))
+        fft = np.fft.fft2(img_array)
         fft_shift = np.fft.fftshift(fft)
-        magnitude = np.log(1 + np.abs(fft_shift))
+        
+        # Add epsilon (1e-8) to prevent log(0) which causes -inf tensors
+        magnitude = np.log(1 + np.abs(fft_shift) + 1e-8)
         
         # Normalize to [0, 1]
         magnitude = (magnitude - magnitude.min()) / (magnitude.max() - magnitude.min() + 1e-8)
         
+        # Output shape: (H, W)
         return magnitude
     except Exception as e:
         print(f"FFT extraction failed: {e}")
@@ -59,36 +61,37 @@ def extract_fft_feature(image: Image):
 
 def extract_prnu_feature(image: Image):
     """
-    Extract PRNU using PyTorch optimized Convolution (100x Faster).
+    Extract PRNU using PyTorch optimized Convolution.
     """
     try:
         # 1. Convert PIL Image to PyTorch Tensor (Grayscale)
-        # Shape becomes: (1, 1, H, W) for conv2d compatibility
         img_array = np.array(image.convert('L'))
         img_tensor = torch.from_numpy(img_array).float().unsqueeze(0).unsqueeze(0)
         
-        # 2. Define the High-Pass Filter Kernel (Edge Detection)
+        # 2. Define the High-Pass Filter Kernel (Laplacian/Edge Detection)
         kernel = torch.tensor([[-1, -1, -1],
                                [-1,  8, -1],
                                [-1, -1, -1]], dtype=torch.float32)
-        # Reshape kernel to (Out_Channels, In_Channels, H, W) -> (1, 1, 3, 3)
         kernel = kernel.unsqueeze(0).unsqueeze(0)
 
-        # 3. Apply Convolution (The heavy lifting)
-        # padding=1 ensures output size matches input size
+        # 3. Apply Convolution
+        # padding=1 ensures a 384x384 input remains exactly 384x384
         prnu_tensor = F.conv2d(img_tensor, kernel, padding=1)
         
-        # 4. Post-processing (Abs & Normalize)
+        # 4. Post-processing
         prnu_tensor = torch.abs(prnu_tensor)
         
-        # Avoid division by zero
+        # Robust Normalization: Clamp extreme outliers before min/max normalization
+        # This prevents a single dead/hot pixel from destroying the feature map contrast
+        prnu_tensor = torch.clamp(prnu_tensor, min=0.0, max=torch.quantile(prnu_tensor, 0.99))
+        
         min_val = prnu_tensor.min()
         max_val = prnu_tensor.max()
         if max_val - min_val > 0:
             prnu_tensor = (prnu_tensor - min_val) / (max_val - min_val)
         
-        # 5. Convert back to Numpy array (H, W)
-        return prnu_tensor.squeeze().numpy()
+        # Output shape: (H, W) - Fully squeezed to match ELA and FFT dimensions
+        return prnu_tensor.squeeze() 
     
     except Exception as e:
         print(f"PRNU extraction failed: {e}")

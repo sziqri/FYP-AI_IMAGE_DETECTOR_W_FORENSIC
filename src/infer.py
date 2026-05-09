@@ -3,106 +3,132 @@ from pathlib import Path
 import json
 import torch
 from PIL import Image
-from torchvision import transforms
 
+# --- DYNAMIC MODEL IMPORTS ---
 from models.efficientnet_v2 import EfficientNetV2MStandard, EfficientNetV2MWithExtras
+from models.resnet import ResNet50Standard, ResNet50WithExtras
+
 from transforms import build_transforms
 from transforms_extra import build_transforms_with_extras
 
-def load_checkpoint(ckpt_path: str, num_classes: int, in_chans: int = 3):
-    ckpt = torch.load(ckpt_path, map_location="cpu")
+def load_checkpoint_and_config(ckpt_path: str, device: str):
+    """Loads the model and automatically extracts training configurations."""
+    ckpt = torch.load(ckpt_path, map_location=device)
     
-    # Auto-detect model type from config
+    # 1. Auto-extract configuration saved during training
     config = ckpt.get("config", {})
-    model_type = config.get("model", "efficientnet_v2_m")
+    classes = ckpt.get("classes", ["Real", "AI-Generated"])  # Fallback to binary
+    num_classes = len(classes)
     
-    if config.get("use_extras", False):
-        model = EfficientNetV2MWithExtras(num_classes=num_classes, in_chans=in_chans, pretrained=False)
+    use_extras = config.get("use_extras", False)
+    use_fft = config.get("use_fft", False)
+    use_ela = config.get("use_ela", False)
+    use_prnu = config.get("use_prnu", False)
+    
+    # 2. Dynamically calculate input channels
+    in_chans = 3
+    if use_extras:
+        in_chans += int(use_fft) + int(use_ela) + int(use_prnu)
+
+    # 3. Dynamically build the correct architecture
+    model_type = config.get("model", "efficientnet_v2_m").lower()
+    
+    if "efficientnet" in model_type:
+        if use_extras:
+            model = EfficientNetV2MWithExtras(num_classes=num_classes, in_chans=in_chans, pretrained=False)
+        else:
+            model = EfficientNetV2MStandard(num_classes=num_classes, pretrained=False)
+    elif "resnet" in model_type:
+        if use_extras:
+            model = ResNet50WithExtras(num_classes=num_classes, in_chans=in_chans, pretrained=False)
+        else:
+            model = ResNet50Standard(num_classes=num_classes, pretrained=False)
     else:
-        model = EfficientNetV2MStandard(num_classes=num_classes, pretrained=False)
+        raise ValueError(f"Unknown model type in checkpoint config: {model_type}")
     
+    # 4. Load weights
     model.load_state_dict(ckpt["model_state"], strict=True)
     model.eval()
-    classes = ckpt.get("classes", None)
     
-    # Debug info
-    print(f"✅ Loaded {model_type} with {num_classes} classes, {in_chans} input channels")
-    if classes:
-        print(f"✅ Classes: {classes}")
+    # Debug info for the terminal/GUI console
+    print(f" Loaded Checkpoint: {Path(ckpt_path).name}")
+    print(f"   ├─ Model Architecture: {model_type.upper()}")
+    print(f"   ├─ Classes: {num_classes} {classes}")
+    print(f"   ├─ Channels: {in_chans}")
+    print(f"   └─ Forensic Features -> FFT: {use_fft} | ELA: {use_ela} | PRNU: {use_prnu}")
     
-    return model, classes
+    return model, classes, config
 
 def main():
-    parser = argparse.ArgumentParser(description="AI Image Detection Inference with EfficientNetV2-M")
+    parser = argparse.ArgumentParser(description="AI Image Detection Inference for GUI")
     parser.add_argument("--paths", type=str, nargs="+", required=True, help="Image paths to analyze")
     parser.add_argument("--ckpt", type=str, required=True, help="Path to model checkpoint")
-    parser.add_argument("--img_size", type=int, default=384, help="Image size (384 for EfficientNetV2-M)")  # CHANGED DEFAULT
-    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device to run inference on")  # IMPROVED DEFAULT
+    parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device to run inference on")
     parser.add_argument("--topk", type=int, default=2, help="Number of top predictions to show")
-    parser.add_argument("--use_extras", action="store_true", help="Use FFT/ELA/PRNU channels")
-    parser.add_argument("--use_fft", action="store_true", help="Use FFT channel")
-    parser.add_argument("--use_ela", action="store_true", help="Use ELA channel")
-    parser.add_argument("--use_prnu", action="store_true", help="Use PRNU channel")
     
     args = parser.parse_args()
-
     device = torch.device(args.device)
-    extra_ch = (1 if args.use_fft else 0) + (1 if args.use_ela else 0) + (1 if args.use_prnu else 0)
-    in_chans = 3 + extra_ch if args.use_extras else 3
 
-    # Auto-detect num_classes from checkpoint if possible
-    checkpoint_info = torch.load(args.ckpt, map_location="cpu")
-    num_classes = len(checkpoint_info.get("classes", ["AI", "Real"]))  # Auto-detect
-    
-    # Load the model from the latest checkpoint
-    model, classes = load_checkpoint(args.ckpt, num_classes=num_classes, in_chans=in_chans)
+    # Load model and auto-detect settings
+    model, classes, config = load_checkpoint_and_config(args.ckpt, device="cpu")
     model.to(device)
 
-    # Select the appropriate transform
-    if args.use_extras:
-        tfm = build_transforms_with_extras(args.img_size, train=False,
-                                           use_fft=args.use_fft, use_ela=args.use_ela, use_prnu=args.use_prnu)
+    # Read the exact image size used during training (Defaults to 384 if not found)
+    img_size = config.get("img_size", 384)
+
+    # Select the appropriate transform using the extracted config
+    if config.get("use_extras", False):
+        tfm = build_transforms_with_extras(
+            img_size=img_size, 
+            train=False,
+            use_fft=config.get("use_fft", False), 
+            use_ela=config.get("use_ela", False), 
+            use_prnu=config.get("use_prnu", False)
+        )
     else:
-        tfm = build_transforms(args.img_size, train=False)
+        tfm = build_transforms(img_size=img_size, train=False)
 
     # Load and process images
     paths = [Path(p) for p in args.paths]
     results = {}
     
-    print(f"🔍 Analyzing {len(paths)} image(s) with {model.__class__.__name__}...")
+    print(f"\n Analyzing {len(paths)} image(s) via SmartCropPad ({img_size}x{img_size})...")
     
     with torch.no_grad():
         for img_path in paths:
             try:
                 img = Image.open(img_path).convert("RGB")
+                
+                # Apply the non-destructive transform pipeline
                 x = tfm(img).unsqueeze(0).to(device)
+                
                 logits = model(x)
                 probs = torch.softmax(logits, dim=-1)
-                conf, idx = torch.topk(probs, k=args.topk, dim=-1)
+                conf, idx = torch.topk(probs, k=min(args.topk, len(classes)), dim=-1)
+                
                 conf, idx = conf.squeeze(0).cpu().tolist(), idx.squeeze(0).cpu().tolist()
+                labels = [classes[i] for i in idx]
                 
-                # Get class labels
-                if classes:
-                    labels = [classes[i] for i in idx]
-                else:
-                    labels = ["AI-Generated" if i == 1 else "Real" for i in idx]  # Fallback
+                # Format for GUI JSON parsing
+                results[str(img_path)] = {
+                    "status": "success",
+                    "predictions": [{"label": l, "confidence": float(c)} for l, c in zip(labels, conf)],
+                    "pipeline": f"CenterCrop/Pad {img_size}x{img_size}"
+                }
                 
-                results[str(img_path)] = [{"label": l, "confidence": float(c)} for l, c in zip(labels, conf)]
-                
-                # Print immediate results for user feedback
-                top_label = labels[0]
-                top_conf = conf[0]
-                print(f"📊 {img_path.name}: {top_label} ({top_conf:.2%})")
+                # Print immediate results for terminal feedback
+                print(f" {img_path.name}: {labels[0]} ({conf[0]:.2%})")
                 
             except Exception as e:
-                print(f"❌ Error processing {img_path}: {e}")
-                results[str(img_path)] = {"error": str(e)}
+                print(f" Error processing {img_path}: {e}")
+                results[str(img_path)] = {"status": "error", "error_message": str(e)}
 
-    # Output final results in JSON format
+    # Output final results in strictly formatted JSON for the GUI backend to parse
     print("\n" + "="*50)
-    print("FINAL RESULTS:")
-    print("="*50)
+    print("FINAL_JSON_OUTPUT_START")
     print(json.dumps(results, indent=2))
+    print("FINAL_JSON_OUTPUT_END")
+    print("="*50)
 
 if __name__ == "__main__":
     main()
