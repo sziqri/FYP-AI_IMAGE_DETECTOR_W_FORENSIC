@@ -1,13 +1,13 @@
 # AI Image Detector Using CNN and Forensic Features
 
-## 📌 Description
+##  Description
 This repository contains the official codebase for the research project: **AI Image Detector using CNN Model and Forensic Features**. It provides a robust deep learning framework designed to classify images as either "Real" or "AI-Generated". 
 
 Unlike standard CNN classifiers that rely solely on RGB spatial data, this system extracts deep digital forensic artifacts—specifically **Error Level Analysis (ELA)**, **Fast Fourier Transform (FFT)**, and **Photo Response Non-Uniformity (PRNU / Laplacian HPF)**. These features are concatenated with the RGB image to form a 6-channel input tensor, allowing models like MobileNet, ResNet50, and EfficientNetV2 to detect the micro-artifacts left behind by generative AI models.
 
 This backend is specifically designed to integrate seamlessly with a Graphical User Interface (GUI) forensic tool.
 
-## ✨ Features
+##  Features
 * **Multi-Channel Forensic Architecture:** Modifies standard CNN first-layers to accept 6-channel inputs (RGB + ELA + FFT + PRNU) dynamically.
 * **Supported Models:** MobileNetV1, MobileNetV2, MobileNetV3-Small, ResNet50, and EfficientNetV2-M. Includes baseline replication modes and enhanced forensic modes.
 * **Non-Destructive Preprocessing (`SmartCropPad`):** Avoids standard bilinear interpolation during training by using reflection padding and cropping, preserving delicate pixel-level generative artifacts.
@@ -15,7 +15,7 @@ This backend is specifically designed to integrate seamlessly with a Graphical U
 * **Forensic Metrics Tracking:** Calculates standard metrics alongside specific forensic metrics: **FAR** (False Acceptance Rate) and **FRR** (False Rejection Rate).
 * **GUI-Ready Inference:** The `infer.py` script automatically configures itself from saved checkpoints and outputs strict JSON blocks for easy parsing by a frontend GUI.
 
-## 🛠 Technologies Used
+##  Technologies Used
 * **Deep Learning Framework:** PyTorch, Torchvision, `timm` (for MobileNetV1)
 * **Metrics:** Torchmetrics
 * **Image Processing:** Pillow (PIL), NumPy, SciPy (via NumPy FFT)
@@ -24,7 +24,7 @@ This backend is specifically designed to integrate seamlessly with a Graphical U
 
 ---
 
-## 📂 Project Setup
+##  Project Setup
 
 ### 1. Installation
 Clone the repository and install the necessary dependencies via a virtual environment.
@@ -78,7 +78,7 @@ data/
 
 ---
 
-## ⚙️ Configuration (`configs/mobilenet.yaml`)
+##  Configuration (`configs/mobilenet.yaml`)
 Training runs are controlled via YAML files. Here is an example of the setup for **MobileNetV1** using all forensic features:
 
 ```yaml
@@ -112,7 +112,7 @@ You are free to config on your own. For my paper, i only toggle true/false in Fo
 
 ---
 
-## 🚀 How to Run the Project
+##  How to Run the Project
 
 ### 1. Start Training
 To start training the model based on your configuration file:
